@@ -17,9 +17,9 @@ on:
         required: true
         default: 'ares_user'
       kernel_branch:
-        description: '内核源码分支 (定时/push 触发时默认 main)'
+        description: '内核源码分支 (留空则使用各变体默认分支: KSU→T, KSU-Next→main)'
         required: false
-        default: 'main'
+        default: ''
       enable_kprobes:
         description: '强制开启 KPROBES (非GKI设备建议开)'
         required: false
@@ -29,7 +29,7 @@ on:
   schedule:
     - cron: '0 0 * * 1'
 
-  # 推送到 main 分支时自动触发 (仅校验工作流本身)
+  # 推送到 main 分支时自动触发
   push:
     branches: [ main ]
     paths:
@@ -45,44 +45,51 @@ env:
 
 jobs:
   # ═══════════════════════════════════════════════════════════
-  # 预处理：决定本次编译哪些变体 (KSU / KSU-Next)
+  # 预处理：决定本次编译哪些变体以及对应分支
   # ═══════════════════════════════════════════════════════════
   prepare:
     name: 准备构建矩阵
     runs-on: ubuntu-22.04
     outputs:
-      variants: ${{ steps.set-variants.outputs.variants }}
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - id: set-variants
+      - id: set-matrix
         run: |
+          # KSU 仓库默认分支是 T, KSU-Next 默认分支是 main
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            # 定时任务: 同时编译两个版本
-            echo 'variants=["KernelSU","KernelSU-Next"]' >> "$GITHUB_OUTPUT"
+            # 定时任务: 同时编译两个版本, 各用默认分支
+            echo 'matrix={"include":[{"variant":"KernelSU","branch":"T"},{"variant":"KernelSU-Next","branch":"main"}]}' >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # 手动触发: 只编译用户选择的版本
             VAR="${{ github.event.inputs.variant }}"
-            echo "variants=[\"$VAR\"]" >> "$GITHUB_OUTPUT"
+            USER_BRANCH="${{ github.event.inputs.kernel_branch }}"
+            if [ "$VAR" = "KernelSU-Next" ]; then
+              DEFAULT_BRANCH="main"
+            else
+              DEFAULT_BRANCH="T"
+            fi
+            BRANCH="${USER_BRANCH:-$DEFAULT_BRANCH}"
+            echo "matrix={\"include\":[{\"variant\":\"$VAR\",\"branch\":\"$BRANCH\"}]}" >> "$GITHUB_OUTPUT"
           else
-            # push 触发: 默认编译 KSU
-            echo 'variants=["KernelSU"]' >> "$GITHUB_OUTPUT"
+            # push 触发: 编译 KSU 版 (T 分支)
+            echo 'matrix={"include":[{"variant":"KernelSU","branch":"T"}]}' >> "$GITHUB_OUTPUT"
           fi
 
   # ═══════════════════════════════════════════════════════════
   # 内核编译
   # ═══════════════════════════════════════════════════════════
   build:
-    name: 编译内核并打包
+    name: 编译 ${{ matrix.variant }} (${{ matrix.branch }})
     needs: prepare
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        variant: ${{ fromJSON(needs.prepare.outputs.variants) }}
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     env:
-      # 根据变体设置内核仓库与字符串标识
+      # 根据变体设置内核仓库
       KERNEL_REPO_FULL: ${{ matrix.variant == 'KernelSU-Next' && 'supercutefish/KernelSU-NEXT_Mi-ares' || 'WangCghy/KernelSU_ares' }}
-      KERNEL_BRANCH: ${{ github.event.inputs.kernel_branch || 'main' }}
+      KERNEL_BRANCH: ${{ matrix.branch }}
       KSU_TYPE: ${{ matrix.variant }}
 
     steps:
@@ -216,7 +223,8 @@ jobs:
     name: 发布 Release
     needs: build
     runs-on: ubuntu-22.04
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # 手动触发、定时、或 push 到 main 时发布
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'push'
     permissions:
       contents: write
 
@@ -253,6 +261,8 @@ jobs:
           - 触发方式: INNEREOF
           if [ "${{ github.event_name }}" = "schedule" ]; then
             echo "定时自动 (每周一)" >> release-body.md
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "代码推送自动" >> release-body.md
           else
             echo "手动触发" >> release-body.md
           fi
