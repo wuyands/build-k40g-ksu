@@ -2,7 +2,7 @@
 
 > 📱 适用设备：**红米 K40 游戏增强版**（代号 `ares`，也称 POCO F3 GT）
 >
-> 🎯 本仓库让你**不需要电脑装环境、不需要懂命令行**，只需要动动鼠标在网页上点几下，就能在 GitHub 云端自动编译出带有 KernelSU 的内核刷机包！
+> 🎯 本仓库让你**不需要电脑装环境、不需要懂命令行**，只需要动动鼠标在网页上点几下，就能在 GitHub 云端自动编译出带有 KernelSU 的 **boot.img**，直接 `fastboot flash boot` 刷入即可！
 
 ---
 
@@ -11,13 +11,14 @@
 1. [前置准备：开启 GitHub Actions](#一前置准备开启-github-actions)
 2. [Fork 仓库到你的账号](#二fork-仓库到你的账号)
 3. [配置权限（GitHub Token）](#三配置权限github-token)
-4. [手动触发编译](#四手动触发编译)
-5. [下载刷机包](#五下载刷机包)
-6. [解锁 BootLoader](#六解锁-bootloader)
-7. [刷入内核](#七刷入内核)
-8. [验证 KernelSU 是否生效](#八验证-kernelsu-是否生效)
-9. [常见问题 FAQ](#九常见问题-faq)
-10. [编译细节（给想深入了解的人）](#十编译细节给想深入了解的人)
+4. [获取原厂 stock boot.img](#四获取原厂-stock-bootimg)
+5. [手动触发编译](#五手动触发编译)
+6. [下载 boot.img](#六下载-bootimg)
+7. [解锁 BootLoader](#七解锁-bootloader)
+8. [刷入 boot.img](#八刷入-bootimg)
+9. [验证 KernelSU 是否生效](#九验证-kernelsu-是否生效)
+10. [常见问题 FAQ](#十常见问题-faq)
+11. [编译细节（给想深入了解的人）](#十一编译细节给想深入了解的人)
 
 ---
 
@@ -40,13 +41,13 @@
 - Fork 后你会得到 `你的用户名/build-k40g-ksu` 这样一个仓库
 - 后续所有操作都在**你自己 Fork 的仓库**里进行，不需要动原仓库
 
-> 💡 **Fork 之后要不要修改任何文件？** 不需要！直接跳到下一步配置 Token 就行。如果你只是想编译，什么都不要改。
+> 💡 **Fork 之后要不要修改任何文件？** 不需要！直接跳到下一步配置 Token 就行。
 
 ---
 
 ## 三、配置权限（GitHub Token）
 
-编译完成后的刷机包会自动发布到 **Release** 页面，这需要你给 Actions 一个"写权限"。操作如下：
+编译完成后的 boot.img 会自动发布到 **Release** 页面，这需要你给 Actions 一个"写权限"。操作如下：
 
 ### 3.1 生成 Personal Access Token
 
@@ -74,50 +75,86 @@
 
 ---
 
-## 四、手动触发编译
+## 四、获取原厂 stock boot.img
 
-### 4.1 标准用户（大部分情况）
+> ⚠️ **这一步非常重要！** 工作流需要你提供原厂 boot.img 的下载地址，编译时会把 KernelSU 内核注入到这个 boot.img 里。如果 boot.img 和你手机当前系统版本不匹配，刷入后可能无法开机！
+
+### 4.1 从哪里获取 boot.img？
+
+boot.img 包含在小米官方线刷固件包里。获取方式：
+
+1. 到 [MIUI 官方 ROM 下载站](https://roms.miuier.com/zh-cn/devices/ares/) 查找 ares（红米K40游戏增强版）的线刷包
+2. 下载和你手机当前系统版本一致的 **fastboot 线刷包**（.tgz 格式，几个G）
+3. 解压后找到 `boot.img` 文件（通常在 `images/` 目录下）
+
+> 💡 **不会找？** 看手机：设置 → 我的设备 → MIUI 版本，记下完整版本号（如 `14.0.4.0.SJPCNXM`），然后到下载站找对应版本。
+
+### 4.2 上传 boot.img 到可下载的地方
+
+工作流需要一个**直接下载链接**（URL）来拉取 boot.img。你可以：
+
+**方式A：上传到你的 GitHub 仓库 Release（推荐）**
+1. 在你 Fork 的仓库创建一个 Release（随便起个 tag，如 `stock-boot`）
+2. 把 boot.img 作为附件上传
+3. 复制下载链接（右键附件 → 复制链接地址）
+
+**方式B：上传到网盘/图床**
+- 上传到支持直链下载的网盘或文件托管服务
+- 确保链接是**直接下载**的（不是预览页面）
+
+> ⚠️ 链接必须是 `curl` 能直接下载的直链，不能是需要登录或跳转的页面。
+
+### 4.3 记下这个下载链接
+
+下一步触发编译时需要填入这个 URL。
+
+---
+
+## 五、手动触发编译
+
+### 5.1 触发工作流
 
 1. 在你 Fork 的仓库页面，点 **Actions** 标签页
 2. 左侧找到工作流 **「编译红米K40G KernelSU 内核」**
 3. 点击 **Run workflow** 下拉按钮
-4. 弹出的参数保持默认就行：
+4. 填写参数：
    - **KernelSU 版本**：选 `KernelSU`（新手推荐）
-   - **defconfig**：默认 `ares_user`（不要改）
-   - **内核源码分支**：默认 `main`（不要改）
-   - **强制开启 KPROBES**：默认 `true`（不要改）
+   - **defconfig**：默认 `ares_user`（不懂就别改）
+   - **内核源码分支**：留空（自动用默认分支）
+   - **强制开启 KPROBES**：默认 `true`（不懂就别改）
+   - **原厂 stock boot.img 下载地址**：⚠️ **必填！** 粘贴第四步获取的 boot.img 直链 URL
 5. 点击绿色 **Run workflow** 按钮
 6. 等待约 20-40 分钟（可以在 Actions 页面看进度）
 
-### 4.2 进阶用户（可选）
+### 5.2 注意事项
 
-- 如果想尝鲜，**KernelSU 版本**可以选 `KernelSU-Next`
-- 定时自动编译：每周一 UTC 00:00 自动跑一次，同时编译 KSU 和 KSU-Next 双版本
-- 手动编译触发后会**自动发布 Release**，定时编译也一样
+- **boot.img 必须和你手机当前系统版本一致**，否则刷入后可能无法开机
+- 编译完成后会自动发布 Release，里面是已注入 KSU 内核的 boot.img
+- 定时任务（每周一）因为无法自动获取 boot.img URL，不会发布 Release
 
 ---
 
-## 五、下载刷机包
+## 六、下载 boot.img
 
-编译完成后，刷机包会出现在两个地方：
+编译完成后，boot.img 会出现在两个地方：
 
 ### 方式一：从 Release 下载（推荐）
 
 1. 在你 Fork 的仓库页面，点击右侧 **Releases**
 2. 找到最新的 Release（名字类似 `KernelSU 红米K40G 内核 #1`）
-3. 下载 `.zip` 文件，例如 `ksu-ares-20250626-1200.zip`
+3. 下载 `.img` 文件，例如 `ksu-boot-20250626-1200.img`
 
 ### 方式二：从 Actions Artifact 下载
 
 1. 在 Actions 页面点进刚完成的运行记录
-2. 页面底部 **Artifacts** 区域下载 `.zip` 文件
+2. 页面底部 **Artifacts** 区域下载 `.img` 文件
 3. Artifact 会保存 30 天，到期自动删除
 
-> 📥 下载到电脑上后，把这个 zip 文件传到手机里备用。
+> 📥 下载到电脑上后，这个 img 文件就是已经注入了 KernelSU 内核的 boot.img。
 
 ---
 
-## 六、解锁 BootLoader
+## 七、解锁 BootLoader
 
 > ⚠️ **解锁 BL 会清除手机全部数据，请先备份！**
 
@@ -134,28 +171,42 @@
 
 ---
 
-## 七、刷入内核
+## 八、刷入 boot.img
 
-### 方案一：TWRP 卡刷（推荐小白）
+### 8.1 准备工作
 
-1. 下载 ares 的 TWRP Recovery：[TWRP for ares](https://twrp.me)
-2. 手机关机，同时按住 **音量下 + 电源键** 进入 Fastboot
-3. 电脑执行：`fastboot flash recovery twrp-ares.img`
-4. 同时按住 **音量上 + 电源键** 进入 TWRP
-5. 在 TWRP 中点 **安装**，选择你传到手机的 `.zip` 刷机包
-6. 滑动确认刷入，完成后点 **重启系统**
+1. 电脑安装 [ADB 和 Fastboot 工具](https://developer.android.com/studio/releases/platform-tools)
+2. 手机进入 Fastboot 模式（关机后按住 **音量下 + 电源键**）
+3. USB 连接电脑
+4. 打开命令提示符/终端，输入 `fastboot devices` 确认能识别到设备
 
-### 方案二：Fastboot 直接刷入
+### 8.2 刷入 boot.img
 
-1. 把 zip 包解压，提取出 `Image` 文件
-2. 用 [magiskboot](https://github.com/topjohnwu/Magisk/releases) 替换原厂 boot.img 的内核
-3. 执行 `fastboot flash boot 修改后的boot.img`
+```bash
+fastboot flash boot <下载的img文件名>
+fastboot reboot
+```
 
-> ⚠️ 方案二较复杂，新手直接用 TWRP 卡刷即可。
+例如：
+```bash
+fastboot flash boot ksu-boot-20250626-1200.img
+fastboot reboot
+```
+
+### 8.3 ⚠️ 安全建议：先临时引导测试
+
+如果不确定 boot.img 是否兼容，可以先**临时引导**（不写入手机）：
+```bash
+fastboot boot <下载的img文件名>
+```
+
+如果能正常开机，说明兼容，再用 `fastboot flash boot` 正式刷入。如果无法开机，直接拔线重启即可恢复原系统。
+
+> 💡 临时引导只是这一次用新内核启动，重启后还是原来的系统，不会修改手机里的任何东西。
 
 ---
 
-## 八、验证 KernelSU 是否生效
+## 九、验证 KernelSU 是否生效
 
 刷完后开机，验证 KernelSU 是否正常工作：
 
@@ -163,66 +214,66 @@
 2. 打开 KernelSU Manager
 3. 如果看到界面显示「工作中」或类似提示，说明刷入成功 ✅
 4. 如果显示「不支持」或「未安装」，说明内核刷入失败，请检查：
-   - 是否刷入了正确的 zip 包？
+   - boot.img 是否和你手机系统版本匹配？
    - 是否下载了最新的 Release？
-   - 手机系统版本是否和内核匹配？
+   - 是否刷入了正确的分区（boot 分区，不是其他）？
 
 ---
 
-## 九、常见问题 FAQ
+## 十、常见问题 FAQ
 
 ### Q1: 编译失败了怎么办？
 
 A: 点进 Actions 里失败的运行记录，查看日志找报错信息。常见原因：
+- boot.img 下载失败 → 检查 URL 是否正确、是否为直链
 - 网络问题导致源码下载失败 → 重新跑一次
-- 工具链下载失败 → 等几分钟重新跑
 - 如果多次失败，去 [Issues](https://github.com/wuyands/build-k40g-ksu/issues) 提问
 
-### Q2: Fork 后还能同步原仓库的更新吗？
+### Q2: 刷入后无法开机怎么办？
 
-A: 可以。在你 Fork 的仓库页面，点击 **Sync fork** → **Update branch** 即可同步。如果原仓库有工作流更新，同步后你的也会更新。
+A: 可能是 boot.img 与当前系统版本不匹配。进入 Fastboot，刷回官方 boot.img 即可恢复：
+```bash
+fastboot flash boot stock_boot.img
+fastboot reboot
+```
 
-### Q3: 编译一次要多久？
+> 💡 所以第四步获取的 stock boot.img **一定要备份**，万一翻车可以刷回去。
+
+### Q3: Fork 后还能同步原仓库的更新吗？
+
+A: 可以。在你 Fork 的仓库页面，点击 **Sync fork** → **Update branch** 即可同步。
+
+### Q4: 编译一次要多久？
 
 A: 约 20-40 分钟，取决于 GitHub Actions 服务器的繁忙程度。
 
-### Q4: GitHub Actions 免费额度够用吗？
+### Q5: GitHub Actions 免费额度够用吗？
 
-A: 够用。GitHub 免费账号每月有 2000 分钟 Actions 额度，编译一次约 30 分钟，一个月手动编译几次完全够用。
-
-### Q5: 刷入后无法开机怎么办？
-
-A: 可能是内核版本与当前系统不匹配。进入 Fastboot，刷回官方 boot.img 即可恢复：
-1. 从官方 ROM 包中提取 boot.img
-2. `fastboot flash boot boot.img` 刷回
+A: 够用。GitHub 免费账号每月有 2000 分钟 Actions 额度，编译一次约 30 分钟，一个月编译几次完全够用。
 
 ### Q6: 需要 Root 权限才能刷吗？
 
-A: 不需要。只要解锁了 BootLoader，就可以刷入内核。KernelSU 本身就是一种 Root 方案，刷入后你就有 Root 权限了。
+A: 不需要。只要解锁了 BootLoader，就可以用 fastboot 刷入 boot.img。KernelSU 本身就是一种 Root 方案，刷入后你就有 Root 权限了。
 
 ### Q7: KernelSU 和 KernelSU-Next 有什么区别？
 
-A: KernelSU 是原版；KernelSU-Next 是社区维护的增强版，增加了更多内核版本的兼容性和新特性。新手建议先用 KernelSU。
+A: KernelSU 是原版；KernelSU-Next 是社区维护的增强版。新手建议先用 KernelSU。
 
 ### Q8: 我的系统是 MIUI/HyperOS，能用吗？
 
-A: 可以。只要内核源码和当前系统版本匹配就行。如果刷入后不开机，说明内核版本不匹配，刷回官方 boot.img 即可。
+A: 可以。关键是 boot.img 要从你当前系统版本的固件包里提取。如果刷入后不开机，刷回官方 boot.img 即可。
 
-### Q9: 可以用在非 MIUI 系统上吗（类原生等）？
+### Q9: 编译出的内核会被检测为第三方内核吗？
 
-A: 取决于内核是否兼容。理论上只要是 ares 的 ROM 都可以尝试，但不保证 100% 兼容。
+A: **不会。** 编译脚本会自动清除源码中的自定义版本标识（如 `-khanra17_v0.1` 等），编译后 `uname -r` 输出与官方一致（`4.14.186`）。
 
-### Q10: 我不懂技术，这个教程我真的能操作下来吗？
+### Q10: 定时任务为什么不发布 Release？
 
-A: 可以！这个教程就是为不懂命令行的小白写的。整个过程你只需要在网页上点点鼠标，解锁 BL 和刷机部分跟着截图一步步来就行。如果卡住了，去 [Issues](https://github.com/wuyands/build-k40g-ksu/issues) 提问。
-
-### Q11: 编译出的内核会被检测为第三方内核吗？
-
-A: **不会。** 本仓库的编译脚本已经做了处理，编译时会自动清除源码中自带的自定义版本标识（如 `-khanra17_v0.1` 等），并且关闭 `CONFIG_LOCALVERSION_AUTO`（不再自动追加 git 提交哈希）。编译后的内核 `uname -r` 输出将与官方内核一致（`4.14.186`），无法通过版本号区分是否为第三方内核。
+A: 定时任务（每周一）无法自动获取你的 boot.img URL（每次需要你手动填写），所以定时任务只编译内核不生成 boot.img、不发布 Release。要获取 boot.img，请手动触发工作流。
 
 ---
 
-## 十、编译细节（给想深入了解的人）
+## 十一、编译细节（给想深入了解的人）
 
 | 项目 | 说明 |
 |------|------|
@@ -233,22 +284,30 @@ A: **不会。** 本仓库的编译脚本已经做了处理，编译时会自动
 | 内核版本 | 4.14.186 |
 | 内核源码 (KSU) | [WangCghy/KernelSU_ares](https://github.com/WangCghy/KernelSU_ares) |
 | 内核源码 (KSU-Next) | [supercutefish/KernelSU-NEXT_Mi-ares](https://github.com/supercutefish/KernelSU-NEXT_Mi-ares) |
-| 工具链 | Neutron Clang (09092023) |
-| 打包工具 | [osm0sis/AnyKernel3](https://github.com/osm0sis/AnyKernel3) |
-| 运行环境 | ubuntu-22.04 |
+| 编译工具链 | apt clang-18 + lld-18 (Ubuntu 24.04) |
+| boot.img 注入工具 | [magiskboot](https://github.com/topjohnwu/Magisk) (Magisk v27.0) |
+| 运行环境 | ubuntu-24.04 |
 | defconfig | `ares_user_defconfig` |
+
+### 工作流程
+
+1. 克隆内核源码 + 初始化 KernelSU 子模块
+2. 用 apt 安装的 clang-18 编译内核 → 产出 `Image`
+3. 下载用户提供的 stock boot.img
+4. 用 magiskboot 解包 boot.img → 替换内核为编译出的 Image → 重新打包
+5. 上传 boot.img artifact + 发布到 Release
 
 ### 关于内核标识
 
-编译脚本会自动清除源码中的自定义 `LOCALVERSION`（如 `-khanra17_v0.1`、`-eatcatsfish-T`），并禁用 `CONFIG_LOCALVERSION_AUTO`（不再自动追加 git 哈希）。因此编译后 `uname -r` 输出为纯净的 `4.14.186`，与官方内核一致，不会被检测为第三方内核。
+编译脚本会自动清除源码中的自定义 `LOCALVERSION`，并禁用 `CONFIG_LOCALVERSION_AUTO`。因此编译后 `uname -r` 输出为纯净的 `4.14.186`，与官方内核一致。
 
 ### 触发方式
 
-| 触发方式 | 说明 | 发布 Release |
-|----------|------|:---:|
-| 手动触发 | Actions 页手动 Run workflow | ✅ |
-| 定时自动 | 每周一 UTC 00:00 编译双版本 | ✅ |
-| Push 触发 | workflow/build.sh 变更时编译 KSU | ❌ |
+| 触发方式 | 说明 | 生成 boot.img | 发布 Release |
+|----------|------|:---:|:---:|
+| 手动触发 | 需填写 boot.img URL | ✅ | ✅ |
+| 定时自动 | 每周一编译双版本 | ❌（无 URL） | ❌ |
+| Push 触发 | workflow/build.sh 变更时编译 | ❌（无 URL） | ❌ |
 
 ---
 
@@ -262,6 +321,5 @@ A: **不会。** 本仓库的编译脚本已经做了处理，编译时会自动
 
 - [KernelSU](https://github.com/tiann/KernelSU) - tiann
 - [KernelSU-Next](https://github.com/rifsxd/KernelSU-Next) - rifsxd
-- [AnyKernel3](https://github.com/osm0sis/AnyKernel3) - osm0sis
-- [Neutron Clang](https://github.com/Neutron-Toolchains/neutron-toolchains)
+- [Magisk](https://github.com/topjohnwu/Magisk) - topjohnwu (magiskboot 工具)
 - 内核源码维护者 [WangCghy](https://github.com/WangCghy) & [supercutefish](https://github.com/supercutefish)
