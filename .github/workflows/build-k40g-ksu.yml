@@ -16,6 +16,10 @@ on:
         description: 'defconfig 名称 (不含 _defconfig 后缀)'
         required: true
         default: 'ares_user'
+      kernel_branch:
+        description: '内核源码分支 (定时/push 触发时默认 main)'
+        required: false
+        default: 'main'
       enable_kprobes:
         description: '强制开启 KPROBES (非GKI设备建议开)'
         required: false
@@ -78,7 +82,7 @@ jobs:
     env:
       # 根据变体设置内核仓库与字符串标识
       KERNEL_REPO_FULL: ${{ matrix.variant == 'KernelSU-Next' && 'supercutefish/KernelSU-NEXT_Mi-ares' || 'WangCghy/KernelSU_ares' }}
-      KERNEL_BRANCH: ${{ matrix.variant == 'KernelSU-Next' && 'main' || 'main' }}
+      KERNEL_BRANCH: ${{ github.event.inputs.kernel_branch || 'main' }}
       KSU_TYPE: ${{ matrix.variant }}
 
     steps:
@@ -222,31 +226,55 @@ jobs:
         with:
           merge-multiple: true
 
+      - name: 生成 Release 描述
+        run: |
+          cat > release-body.md <<'INNEREOF'
+          ## 红米 K40 游戏增强版 (ares) KernelSU 内核
+
+          ### 本 Release 包含
+          | 文件 | 版本 |
+          |------|------|
+          INNEREOF
+          # 根据实际存在的 zip 文件动态生成文件列表
+          for f in *.zip; do
+            if echo "$f" | grep -qi "ksunext"; then
+              VER="KernelSU-Next | supercutefish/KernelSU-NEXT_Mi-ares"
+            else
+              VER="KernelSU | WangCghy/KernelSU_ares"
+            fi
+            echo "| \`$f\` | $VER |" >> release-body.md
+          done
+          cat >> release-body.md <<'INNEREOF'
+
+          - 构建编号: INNEREOF
+          echo "#${{ github.run_number }}" >> release-body.md
+          cat >> release-body.md <<'INNEREOF'
+          - defconfig: ares_user_defconfig
+          - 触发方式: INNEREOF
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "定时自动 (每周一)" >> release-body.md
+          else
+            echo "手动触发" >> release-body.md
+          fi
+          cat >> release-body.md <<'INNEREOF'
+
+          ### 刷入方法
+          1. 解锁 BL
+          2. 进 TWRP Recovery
+          3. 卡刷对应 zip 包
+          > 或 `fastboot flash boot` (需自行替换原厂 boot.img 内核字段)
+
+          > ⚠️ 非官方编译, 仅供学习研究, 刷机风险自负
+          INNEREOF
+          echo "生成的 Release 描述:"
+          cat release-body.md
+
       - name: 发布 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: KernelSU-ares-${{ github.run_number }}
           name: KernelSU 红米K40G 内核 #${{ github.run_number }}
-          body: |
-            ## 红米 K40 游戏增强版 (ares) KernelSU 内核
-
-            ### 本 Release 包含
-            | 版本 | 内核仓库 |
-            |------|---------|
-            | KernelSU | WangCghy/KernelSU_ares |
-            | KernelSU-Next | supercutefish/KernelSU-NEXT_Mi-ares |
-
-            - 构建编号: #${{ github.run_number }}
-            - defconfig: ares_user_defconfig
-            - 触发方式: ${{ github.event_name == 'schedule' && '定时自动 (每周一)' || '手动触发' }}
-
-            ### 刷入方法
-            1. 解锁 BL
-            2. 进 TWRP Recovery
-            3. 卡刷对应 zip 包
-            > 或 `fastboot flash boot` (需自行替换原厂 boot.img 内核字段)
-
-            > ⚠️ 非官方编译, 仅供学习研究, 刷机风险自负
+          body_path: release-body.md
           files: |
             *.zip
           prerelease: false
