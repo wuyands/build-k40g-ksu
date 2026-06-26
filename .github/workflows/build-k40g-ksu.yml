@@ -29,10 +29,6 @@ on:
         required: true
         default: ''
 
-  # 每周一 UTC 00:00 自动编译 (同时编译 KSU + KSU-Next)
-  schedule:
-    - cron: '0 0 * * 1'
-
   # 推送到 main 分支时自动触发
   push:
     branches: [ main ]
@@ -57,10 +53,7 @@ jobs:
       - id: set-matrix
         run: |
           # KSU 仓库默认分支是 T, KSU-Next 默认分支是 main
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            # 定时任务: 同时编译两个版本, 各用默认分支
-            echo 'matrix={"include":[{"variant":"KernelSU","branch":"T"},{"variant":"KernelSU-Next","branch":"main"}]}' >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VAR="${{ github.event.inputs.variant }}"
             USER_BRANCH="${{ github.event.inputs.kernel_branch }}"
             if [ "$VAR" = "KernelSU-Next" ]; then
@@ -212,7 +205,7 @@ jobs:
         run: |
           BOOT_URL="${{ github.event.inputs.boot_img_url }}"
           if [ -z "$BOOT_URL" ]; then
-            echo "::notice::未提供 stock boot.img URL (定时/push 触发无此参数), 跳过 boot.img 生成"
+            echo "::notice::未提供 stock boot.img URL (push 触发无此参数), 跳过 boot.img 生成"
             echo "has_boot=false" >> $GITHUB_OUTPUT
             exit 0
           fi
@@ -326,8 +319,8 @@ jobs:
     name: 发布 Release
     needs: build
     runs-on: ubuntu-24.04
-    # 手动触发、定时、或 push 时发布 (但需要至少有 boot.img)
-    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'push') && github.event.inputs.boot_img_url != ''
+    # 仅在有 boot_img_url 参数时发布 (只有 workflow_dispatch 手动触发才有此参数)
+    if: github.event.inputs.boot_img_url != ''
     permissions:
       contents: write
 
@@ -362,9 +355,7 @@ jobs:
           cat >> release-body.md <<'INNEREOF'
           - defconfig: ares_user_defconfig
           - 触发方式: INNEREOF
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "定时自动 (每周一)" >> release-body.md
-          elif [ "${{ github.event_name }}" = "push" ]; then
+          if [ "${{ github.event_name }}" = "push" ]; then
             echo "代码推送自动" >> release-body.md
           else
             echo "手动触发" >> release-body.md
