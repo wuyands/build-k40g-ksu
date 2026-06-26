@@ -18,7 +18,8 @@ if [ ! -f "Makefile" ] || [ ! -d "arch/arm64" ]; then
   exit 1
 fi
 
-CLANG_DIR="${PWD}/clang"
+# 工具链路径: 优先使用环境变量 CLANG_DIR, 否则回退到 ./clang
+CLANG_DIR="${CLANG_DIR:-${PWD}/clang}"
 
 # 1. 生成 defconfig
 echo "::group::生成 .config ($DEFCONFIG)"
@@ -67,7 +68,7 @@ if [ "$ENABLE_KPROBES" = "true" ]; then
   echo "::endgroup::"
 fi
 
-# 4. 编译内核 (Neutron Clang + LLVM 工具链)
+# 4. 编译内核 (Clang + LLVM 工具链)
 echo "::group::开始编译内核"
 PATH="${CLANG_DIR}/bin:${PATH}" make -j"$(nproc --all)" O=out \
   ARCH=arm64 \
