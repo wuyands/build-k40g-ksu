@@ -122,7 +122,8 @@ jobs:
       - name: 克隆内核源码
         run: |
           echo "克隆 ${KERNEL_REPO_FULL} @ ${KERNEL_BRANCH}"
-          git clone --depth=1 -b "${KERNEL_BRANCH}" "https://github.com/${KERNEL_REPO_FULL}.git" kernel
+          # 不使用 --depth=1 浅克隆, 因为需要子模块历史来 checkout
+          git clone -b "${KERNEL_BRANCH}" "https://github.com/${KERNEL_REPO_FULL}.git" kernel --recurse-submodules
           echo "## 内核源码 (${KSU_TYPE})" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           git -C kernel log -1 --format='提交: %H%n作者: %an%n日期: %ad%n说明: %s' >> $GITHUB_STEP_SUMMARY
