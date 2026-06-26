@@ -1,0 +1,253 @@
+name: 编译红米K40G KernelSU 内核
+
+on:
+  # 手动触发 — 可选择 KSU / KSU-Next
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'KernelSU 版本'
+        required: true
+        type: choice
+        default: 'KernelSU'
+        options:
+          - 'KernelSU'
+          - 'KernelSU-Next'
+      defconfig:
+        description: 'defconfig 名称 (不含 _defconfig 后缀)'
+        required: true
+        default: 'ares_user'
+      enable_kprobes:
+        description: '强制开启 KPROBES (非GKI设备建议开)'
+        required: false
+        default: 'true'
+
+  # 每周一 UTC 00:00 自动编译 (同时编译 KSU + KSU-Next)
+  schedule:
+    - cron: '0 0 * * 1'
+
+  # 推送到 main 分支时自动触发 (仅校验工作流本身)
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-k40g-ksu.yml'
+      - 'build.sh'
+
+env:
+  # AnyKernel3 仓库与分支
+  AK3_REPO: 'osm0sis/AnyKernel3'
+  AK3_BRANCH: 'master'
+  # Neutron Clang 工具链版本 (与 ares 源码 build.sh 一致)
+  NEUTRON_VERSION: '09092023'
+
+jobs:
+  # ═══════════════════════════════════════════════════════════
+  # 预处理：决定本次编译哪些变体 (KSU / KSU-Next)
+  # ═══════════════════════════════════════════════════════════
+  prepare:
+    name: 准备构建矩阵
+    runs-on: ubuntu-22.04
+    outputs:
+      variants: ${{ steps.set-variants.outputs.variants }}
+    steps:
+      - id: set-variants
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # 定时任务: 同时编译两个版本
+            echo 'variants=["KernelSU","KernelSU-Next"]' >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # 手动触发: 只编译用户选择的版本
+            VAR="${{ github.event.inputs.variant }}"
+            echo "variants=[\"$VAR\"]" >> "$GITHUB_OUTPUT"
+          else
+            # push 触发: 默认编译 KSU
+            echo 'variants=["KernelSU"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  # ═══════════════════════════════════════════════════════════
+  # 内核编译
+  # ═══════════════════════════════════════════════════════════
+  build:
+    name: 编译内核并打包
+    needs: prepare
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(needs.prepare.outputs.variants) }}
+
+    env:
+      # 根据变体设置内核仓库与字符串标识
+      KERNEL_REPO_FULL: ${{ matrix.variant == 'KernelSU-Next' && 'supercutefish/KernelSU-NEXT_Mi-ares' || 'WangCghy/KernelSU_ares' }}
+      KERNEL_BRANCH: ${{ matrix.variant == 'KernelSU-Next' && 'main' || 'main' }}
+      KSU_TYPE: ${{ matrix.variant }}
+
+    steps:
+      - name: 签出本仓库
+        uses: actions/checkout@v4
+
+      - name: 显示编译参数
+        run: |
+          echo "::group::编译参数"
+          echo "KSU 版本: ${KSU_TYPE}"
+          echo "内核仓库: ${KERNEL_REPO_FULL}"
+          echo "分支: ${KERNEL_BRANCH}"
+          echo "defconfig: ${{ github.event.inputs.defconfig || 'ares_user' }}_defconfig"
+          echo "工具链版本: ${NEUTRON_VERSION}"
+          echo "触发方式: ${{ github.event_name }}"
+          echo "::endgroup::"
+
+      - name: 安装编译依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ccache cpio curl flex \
+            git gnupg libelf-dev libncurses5-dev libssl-dev \
+            python3 python3-pip unzip wget zip \
+            zstd openssl
+          sudo apt-get clean
+
+      - name: 检查 glibc 版本
+        run: ldd --version | head -n1
+
+      - name: 克隆内核源码
+        run: |
+          echo "克隆 ${KERNEL_REPO_FULL} @ ${KERNEL_BRANCH}"
+          git clone --depth=1 -b "${KERNEL_BRANCH}" "https://github.com/${KERNEL_REPO_FULL}.git" kernel
+          echo "## 内核源码 (${KSU_TYPE})" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          git -C kernel log -1 --format='提交: %H%n作者: %an%n日期: %ad%n说明: %s' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: 下载 Neutron Clang 工具链
+        run: |
+          cd kernel
+          mkdir -p clang && cd clang
+          curl -O "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
+          bash antman -S "${NEUTRON_VERSION}" --ci
+          echo "## 工具链" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ./bin/clang --version | head -n2 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: 编译内核
+        run: |
+          cd kernel
+          DEFCONFIG="${{ github.event.inputs.defconfig || 'ares_user' }}"
+          ENABLE_KPROBES="${{ github.event.inputs.enable_kprobes || 'true' }}"
+          bash "$GITHUB_WORKSPACE/build.sh" "$DEFCONFIG" "$ENABLE_KPROBES"
+
+      - name: 校验编译产物
+        run: |
+          echo "## 编译产物 (${KSU_TYPE})" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -lh kernel/out/arch/arm64/boot/Image* 2>/dev/null || {
+            echo "未找到内核镜像, 编译失败"; exit 1;
+          }
+          echo "" >> $GITHUB_STEP_SUMMARY
+          find kernel/out/arch/arm64/boot/dts -name '*.dtb' 2>/dev/null | head -20 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: 克隆并配置 AnyKernel3
+        run: |
+          git clone --depth=1 -b "${AK3_BRANCH}" "https://github.com/${AK3_REPO}.git" AnyKernel3
+          cp kernel/out/arch/arm64/boot/Image AnyKernel3/Image
+          # 复制 dtb (MTK 设备需要)
+          DTB_DIR="kernel/out/arch/arm64/boot/dts/mediatek"
+          if [ -d "$DTB_DIR" ]; then
+            mkdir -p AnyKernel3/dtb
+            cp "$DTB_DIR"/*.dtb AnyKernel3/dtb/ 2>/dev/null || true
+          fi
+
+      - name: 写入 AnyKernel3 配置
+        run: |
+          cat > AnyKernel3/anykernel.sh <<'EOF'
+          # AnyKernel3 配置 - 红米 K40 游戏增强版 (ares)
+          kernel.string=KernelSU for Redmi K40G (ares)
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.boot=1
+
+          block=auto;
+
+          . $home/anykernel.sh/tools/ak2-core.sh;
+
+          write_boot;
+          EOF
+
+      - name: 打包刷机 zip
+        id: pack
+        run: |
+          cd AnyKernel3
+          rm -rf .git .github README* *placeholder
+          SUFFIX=$(echo "${KSU_TYPE}" | tr '[:upper:]' '[:lower:]' | sed 's/kernelsu/ksu/; s/-//g')
+          ZIP_NAME="${SUFFIX}-ares-$(date -u +%Y%m%d-%H%M).zip"
+          zip -r9 "../$ZIP_NAME" * -x '*.git*'
+          cd ..
+          echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
+          echo "## 打包完成" >> $GITHUB_STEP_SUMMARY
+          echo "文件名: \`$ZIP_NAME\`" >> $GITHUB_STEP_SUMMARY
+          ls -lh "$ZIP_NAME"
+
+      - name: 上传 AnyKernel3 刷机包
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.zip_name }}
+          path: ${{ steps.pack.outputs.zip_name }}
+          retention-days: 30
+          compression-level: 0
+
+      - name: 上传内核原始镜像
+        uses: actions/upload-artifact@v4
+        with:
+          name: Image-ares-${{ matrix.variant }}-${{ github.run_id }}
+          path: kernel/out/arch/arm64/boot/Image
+          retention-days: 15
+
+  # ═══════════════════════════════════════════════════════════
+  # 发布 Release
+  # ═══════════════════════════════════════════════════════════
+  release:
+    name: 发布 Release
+    needs: build
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    permissions:
+      contents: write
+
+    steps:
+      - name: 下载所有刷机包
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: KernelSU-ares-${{ github.run_number }}
+          name: KernelSU 红米K40G 内核 #${{ github.run_number }}
+          body: |
+            ## 红米 K40 游戏增强版 (ares) KernelSU 内核
+
+            ### 本 Release 包含
+            | 版本 | 内核仓库 |
+            |------|---------|
+            | KernelSU | WangCghy/KernelSU_ares |
+            | KernelSU-Next | supercutefish/KernelSU-NEXT_Mi-ares |
+
+            - 构建编号: #${{ github.run_number }}
+            - defconfig: ares_user_defconfig
+            - 触发方式: ${{ github.event_name == 'schedule' && '定时自动 (每周一)' || '手动触发' }}
+
+            ### 刷入方法
+            1. 解锁 BL
+            2. 进 TWRP Recovery
+            3. 卡刷对应 zip 包
+            > 或 `fastboot flash boot` (需自行替换原厂 boot.img 内核字段)
+
+            > ⚠️ 非官方编译, 仅供学习研究, 刷机风险自负
+          files: |
+            *.zip
+          prerelease: false
+          make_latest: true
