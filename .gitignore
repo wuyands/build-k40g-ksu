@@ -1,0 +1,27 @@
+# 内核编译产物
+out/
+clang/
+error.log
+
+# AnyKernel3 打包目录
+AnyKernel3/
+
+# 刷机包 zip
+*.zip
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
