@@ -25,7 +25,28 @@ echo "::group::生成 .config ($DEFCONFIG)"
 make O=out ARCH=arm64 "${DEFCONFIG}_defconfig"
 echo "::endgroup::"
 
-# 2. 强制开启 KernelSU / KPROBES 相关选项 (非 GKI 设备必需)
+# 2. 隐藏自定义内核标识 — 防止被检测为第三方内核
+echo "::group::清除 LOCALVERSION 标识"
+cd out
+# 使用 scripts/config 安全地修改内核配置
+../scripts/config --file .config \
+  --set-str CONFIG_LOCALVERSION '""' \
+  --disable CONFIG_LOCALVERSION_AUTO
+
+# 兜底: 如果 scripts/config 不可用, 直接 sed
+if grep -q 'CONFIG_LOCALVERSION=' .config; then
+  sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION=""/g' .config
+else
+  echo 'CONFIG_LOCALVERSION=""' >> .config
+fi
+sed -i 's/CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/g' .config
+cd ..
+make O=out ARCH=arm64 olddefconfig
+echo "当前 LOCALVERSION 配置:"
+grep -E "CONFIG_LOCALVERSION" out/.config || true
+echo "::endgroup::"
+
+# 3. 强制开启 KernelSU / KPROBES 相关选项 (非 GKI 设备必需)
 if [ "$ENABLE_KPROBES" = "true" ]; then
   echo "::group::开启 KPROBES / KSU 选项"
   cd out
@@ -46,7 +67,7 @@ if [ "$ENABLE_KPROBES" = "true" ]; then
   echo "::endgroup::"
 fi
 
-# 3. 编译内核 (Neutron Clang + LLVM 工具链)
+# 4. 编译内核 (Neutron Clang + LLVM 工具链)
 echo "::group::开始编译内核"
 PATH="${CLANG_DIR}/bin:${PATH}" make -j"$(nproc --all)" O=out \
   ARCH=arm64 \
@@ -64,14 +85,14 @@ PATH="${CLANG_DIR}/bin:${PATH}" make -j"$(nproc --all)" O=out \
   CONFIG_NO_ERROR_ON_MISMATCH=y 2>&1 | tee error.log
 echo "::endgroup::"
 
-# 4. 检查错误
+# 5. 检查错误
 if grep -qiE "error:|fatal:" error.log; then
   echo "::error::编译过程中发现错误, 请查看 error.log"
   grep -iE "error:|fatal:" error.log | head -20
   exit 1
 fi
 
-# 5. 输出产物信息
+# 6. 输出产物信息
 echo "::group::编译产物"
 ls -lh out/arch/arm64/boot/Image* 2>/dev/null || { echo "未找到 Image, 编译失败"; exit 1; }
 echo ""
