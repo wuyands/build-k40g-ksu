@@ -5,6 +5,7 @@
 #   参数2: 是否强制开启 KPROBES (true/false, 默认 true)
 
 set -e
+set -o pipefail
 
 export LC_ALL=C
 export ARCH=arm64
@@ -31,7 +32,7 @@ echo "::group::清除 LOCALVERSION 标识"
 cd out
 # 使用 scripts/config 安全地修改内核配置
 ../scripts/config --file .config \
-  --set-str CONFIG_LOCALVERSION '""' \
+  --set-str CONFIG_LOCALVERSION '' \
   --disable CONFIG_LOCALVERSION_AUTO
 
 # 兜底: 如果 scripts/config 不可用, 直接 sed
@@ -68,7 +69,7 @@ if [ "$ENABLE_KPROBES" = "true" ]; then
   echo "::endgroup::"
 fi
 
-# 4. 编译内核 (Clang + LLVM 工具链)
+# 4. 编译内核 (Neutron Clang + LLVM 工具链)
 echo "::group::开始编译内核"
 PATH="${CLANG_DIR}/bin:${PATH}" make -j"$(nproc --all)" O=out \
   ARCH=arm64 \
