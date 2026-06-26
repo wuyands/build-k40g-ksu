@@ -40,8 +40,6 @@ env:
   # AnyKernel3 仓库与分支
   AK3_REPO: 'osm0sis/AnyKernel3'
   AK3_BRANCH: 'master'
-  # Neutron Clang 工具链版本 (与 ares 源码 build.sh 一致)
-  NEUTRON_VERSION: '09092023'
 
 jobs:
   # ═══════════════════════════════════════════════════════════
@@ -102,7 +100,7 @@ jobs:
           echo "内核仓库: ${KERNEL_REPO_FULL}"
           echo "分支: ${KERNEL_BRANCH}"
           echo "defconfig: ${{ github.event.inputs.defconfig || 'ares_user' }}_defconfig"
-          echo "工具链版本: ${NEUTRON_VERSION}"
+          echo "工具链: apt clang-18 + lld-18"
           echo "触发方式: ${{ github.event_name }}"
           echo "::endgroup::"
 
@@ -113,11 +111,19 @@ jobs:
             bc bison build-essential ccache cpio curl flex \
             git gnupg libelf-dev libncurses5-dev libssl-dev \
             python3 python3-pip unzip wget zip \
-            zstd openssl
+            zstd openssl \
+            clang-18 lld-18 llvm-18 \
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi
           sudo apt-get clean
 
-      - name: 检查 glibc 版本
-        run: ldd --version | head -n1
+      - name: 检查工具链版本
+        run: |
+          ldd --version | head -n1
+          echo "---"
+          clang-18 --version | head -n2
+          echo "---"
+          ld.lld-18 --version
 
       - name: 克隆内核源码
         run: |
@@ -150,15 +156,31 @@ jobs:
           git -C kernel log -1 --format='提交: %H%n作者: %an%n日期: %ad%n说明: %s' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - name: 下载 Neutron Clang 工具链
+      - name: 配置工具链
         run: |
-          cd kernel
-          mkdir -p clang && cd clang
-          curl -O "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
-          bash antman -S "${NEUTRON_VERSION}" --ci
+          # 创建符号链接, 让 build.sh 中的 clang/aarch64-linux-gnu- 等命令能找到系统工具
+          mkdir -p "$GITHUB_WORKSPACE/toolchain/bin"
+          cd "$GITHUB_WORKSPACE/toolchain/bin"
+          ln -sf /usr/bin/clang-18 clang
+          ln -sf /usr/bin/ld.lld-18 ld.lld
+          ln -sf /usr/bin/llvm-strip-18 llvm-strip
+          ln -sf /usr/bin/llvm-as-18 llvm-as
+          ln -sf /usr/bin/llvm-ar-18 llvm-ar
+          ln -sf /usr/bin/llvm-nm-18 llvm-nm
+          ln -sf /usr/bin/llvm-objcopy-18 llvm-objcopy
+          ln -sf /usr/bin/llvm-objdump-18 llvm-objdump
+          # aarch64 交叉编译工具链 (来自 gcc-aarch64-linux-gnu)
+          ln -sf /usr/bin/aarch64-linux-gnu-gcc aarch64-linux-gnu-gcc
+          ln -sf /usr/bin/aarch64-linux-gnu-as aarch64-linux-gnu-as
+          ln -sf /usr/bin/aarch64-linux-gnu-ld aarch64-linux-gnu-ld
+          ln -sf /usr/bin/aarch64-linux-gnu-strip aarch64-linux-gnu-strip
+          # arm 32 位交叉编译工具链
+          if [ -f /usr/bin/arm-linux-gnueabi-gcc ]; then
+            ln -sf /usr/bin/arm-linux-gnueabi-gcc arm-linux-gnueabi-gcc
+          fi
           echo "## 工具链" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          ./bin/clang --version | head -n2 >> $GITHUB_STEP_SUMMARY
+          clang-18 --version | head -n2 >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: 编译内核
@@ -166,6 +188,9 @@ jobs:
           cd kernel
           DEFCONFIG="${{ github.event.inputs.defconfig || 'ares_user' }}"
           ENABLE_KPROBES="${{ github.event.inputs.enable_kprobes || 'true' }}"
+          # 使用系统安装的 clang-18 工具链
+          export CLANG_DIR="$GITHUB_WORKSPACE/toolchain"
+          export PATH="${CLANG_DIR}/bin:${PATH}"
           bash "$GITHUB_WORKSPACE/build.sh" "$DEFCONFIG" "$ENABLE_KPROBES"
 
       - name: 校验编译产物
