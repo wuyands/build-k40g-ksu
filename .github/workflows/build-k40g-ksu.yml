@@ -226,7 +226,7 @@ jobs:
             exit 1
           fi
           echo "stock boot.img 大小: $(numfmt --to=iec $SIZE)"
-          echo "has_boot=true" >> $GITHUB_OUTPUT"
+          echo "has_boot=true" >> $GITHUB_OUTPUT
 
       - name: 下载 magiskboot 工具
         if: steps.dl_boot.outputs.has_boot == 'true'
