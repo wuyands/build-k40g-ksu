@@ -49,7 +49,7 @@ jobs:
   # ═══════════════════════════════════════════════════════════
   prepare:
     name: 准备构建矩阵
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -80,7 +80,7 @@ jobs:
   build:
     name: 编译 ${{ matrix.variant }} (${{ matrix.branch }})
     needs: prepare
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
@@ -243,7 +243,7 @@ jobs:
   release:
     name: 发布 Release
     needs: build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     # 手动触发、定时、或 push 到 main 时发布
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'push'
     permissions:
