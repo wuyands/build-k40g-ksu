@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       variant:
-        description: 'KernelSU 版本'
+        description: 'KernelSU 版本 (不懂就保持默认)'
         required: true
         type: choice
         default: 'KernelSU'
@@ -13,17 +13,21 @@ on:
           - 'KernelSU'
           - 'KernelSU-Next'
       defconfig:
-        description: 'defconfig 名称 (不含 _defconfig 后缀)'
+        description: 'defconfig 名称 (不懂就保持默认)'
         required: true
         default: 'ares_user'
       kernel_branch:
-        description: '内核源码分支 (留空则使用各变体默认分支: KSU→T, KSU-Next→main)'
+        description: '内核源码分支 (留空则使用默认: KSU→T, KSU-Next→main)'
         required: false
         default: ''
       enable_kprobes:
-        description: '强制开启 KPROBES (非GKI设备建议开)'
+        description: '强制开启 KPROBES (不懂就保持默认)'
         required: false
         default: 'true'
+      boot_img_url:
+        description: '原厂 stock boot.img 下载地址 (必填! 从你当前系统固件提取, 见 README 教程)'
+        required: true
+        default: ''
 
   # 每周一 UTC 00:00 自动编译 (同时编译 KSU + KSU-Next)
   schedule:
@@ -37,9 +41,8 @@ on:
       - 'build.sh'
 
 env:
-  # AnyKernel3 仓库与分支
-  AK3_REPO: 'osm0sis/AnyKernel3'
-  AK3_BRANCH: 'master'
+  # Magisk 版本 (用于获取 magiskboot 工具)
+  MAGISK_VERSION: 'v27.0'
 
 jobs:
   # ═══════════════════════════════════════════════════════════
@@ -204,63 +207,95 @@ jobs:
           find kernel/out/arch/arm64/boot/dts -name '*.dtb' 2>/dev/null | head -20 >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - name: 克隆并配置 AnyKernel3
+      - name: 下载 stock boot.img
+        id: dl_boot
         run: |
-          git clone --depth=1 -b "${AK3_BRANCH}" "https://github.com/${AK3_REPO}.git" AnyKernel3
-          cp kernel/out/arch/arm64/boot/Image AnyKernel3/Image
-          # 复制 dtb (MTK 设备需要)
-          DTB_DIR="kernel/out/arch/arm64/boot/dts/mediatek"
-          if [ -d "$DTB_DIR" ]; then
-            mkdir -p AnyKernel3/dtb
-            cp "$DTB_DIR"/*.dtb AnyKernel3/dtb/ 2>/dev/null || true
+          BOOT_URL="${{ github.event.inputs.boot_img_url }}"
+          if [ -z "$BOOT_URL" ]; then
+            echo "::notice::未提供 stock boot.img URL (定时/push 触发无此参数), 跳过 boot.img 生成"
+            echo "has_boot=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
+          echo "下载 stock boot.img: $BOOT_URL"
+          curl -L -o stock_boot.img "$BOOT_URL"
+          ls -lh stock_boot.img
+          # 验证是有效的 boot.img (至少 10MB)
+          SIZE=$(stat -c%s stock_boot.img 2>/dev/null || stat -f%z stock_boot.img)
+          if [ "$SIZE" -lt 10000000 ]; then
+            echo "::error::下载的文件太小 ($SIZE bytes), 可能不是有效的 boot.img"
+            exit 1
+          fi
+          echo "stock boot.img 大小: $(numfmt --to=iec $SIZE)"
+          echo "has_boot=true" >> $GITHUB_OUTPUT
 
-      - name: 写入 AnyKernel3 配置
+      - name: 下载 magiskboot 工具
+        if: steps.dl_boot.outputs.has_boot == 'true'
         run: |
-          cat > AnyKernel3/anykernel.sh <<'EOF'
-          # AnyKernel3 配置 - 红米 K40 游戏增强版 (ares)
-          kernel.string=KernelSU for Redmi K40G (ares)
-          do.devicecheck=0
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.boot=1
-
-          block=auto;
-
-          . $home/anykernel.sh/tools/ak2-core.sh;
-
-          write_boot;
-          EOF
-
-      - name: 打包刷机 zip
-        id: pack
-        run: |
-          cd AnyKernel3
-          rm -rf .git .github README* *placeholder
-          SUFFIX=$(echo "${KSU_TYPE}" | tr '[:upper:]' '[:lower:]' | sed 's/kernelsu/ksu/; s/-//g')
-          ZIP_NAME="${SUFFIX}-ares-$(date -u +%Y%m%d-%H%M).zip"
-          zip -r9 "../$ZIP_NAME" * -x '*.git*'
+          # 从 Magisk releases 获取 magiskboot 二进制 (已包含在 Magisk.apk 内)
+          # magiskboot 是 x86_64 Linux 二进制, 可直接在 ubuntu runner 上运行
+          curl -L -o magisk.apk "https://github.com/topjohnwu/Magisk/releases/download/${MAGISK_VERSION}/Magisk-${MAGISK_VERSION}.apk"
+          ls -lh magisk.apk
+          # 从 APK 中提取 magiskboot (位于 lib/x86_64/libmagiskboot.so)
+          mkdir -p magisk_extract
+          cd magisk_extract
+          unzip -o ../magisk.apk lib/x86_64/libmagiskboot.so > /dev/null
+          # libmagiskboot.so 实际上就是 magiskboot 可执行文件
+          cp lib/x86_64/libmagiskboot.so ../magiskboot
+          chmod +x ../magiskboot
           cd ..
-          echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
-          echo "## 打包完成" >> $GITHUB_STEP_SUMMARY
-          echo "文件名: \`$ZIP_NAME\`" >> $GITHUB_STEP_SUMMARY
-          ls -lh "$ZIP_NAME"
+          # 测试 magiskboot
+          ./magiskboot --help > /dev/null 2>&1 && echo "magiskboot 可用" || {
+            echo "::error::magiskboot 无法运行"
+            exit 1
+          }
 
-      - name: 上传 AnyKernel3 刷机包
+      - name: 注入内核到 boot.img
+        id: inject
+        if: steps.dl_boot.outputs.has_boot == 'true'
+        run: |
+          # 复制 stock boot.img 作为工作副本
+          cp stock_boot.img boot.img
+
+          # 用 magiskboot 解包 boot.img
+          mkdir -p boot_work && cd boot_work
+          ../magiskboot unpack ../boot.img
+
+          # 查看解包结果
+          echo "解包后的文件:"
+          ls -lh
+
+          # 替换内核
+          cp "$GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image" kernel
+
+          # 重新打包
+          ../magiskboot repack ../boot.img ../new_boot.img
+          cd ..
+
+          # 验证新 boot.img
+          ls -lh new_boot.img
+          NEW_SIZE=$(stat -c%s new_boot.img)
+          echo "新 boot.img 大小: $(numfmt --to=iec $NEW_SIZE)"
+
+          # 生成最终文件名
+          SUFFIX=$(echo "${KSU_TYPE}" | tr '[:upper:]' '[:lower:]' | sed 's/kernelsu/ksu/; s/-//g')
+          BOOT_NAME="${SUFFIX}-boot-$(date -u +%Y%m%d-%H%M).img"
+          mv new_boot.img "$BOOT_NAME"
+          echo "boot_name=$BOOT_NAME" >> $GITHUB_OUTPUT
+
+          echo "## boot.img 生成完成" >> $GITHUB_STEP_SUMMARY
+          echo "文件名: \`$BOOT_NAME\`" >> $GITHUB_STEP_SUMMARY
+          echo "大小: $(ls -lh "$BOOT_NAME" | awk '{print $5}')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "刷入命令: \`fastboot flash boot $BOOT_NAME\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: 上传 boot.img
+        if: steps.dl_boot.outputs.has_boot == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.pack.outputs.zip_name }}
-          path: ${{ steps.pack.outputs.zip_name }}
+          name: ${{ steps.inject.outputs.boot_name }}
+          path: ${{ steps.inject.outputs.boot_name }}
           retention-days: 30
           compression-level: 0
-
-      - name: 上传内核原始镜像
-        uses: actions/upload-artifact@v4
-        with:
-          name: Image-ares-${{ matrix.variant }}-${{ github.run_id }}
-          path: kernel/out/arch/arm64/boot/Image
-          retention-days: 15
 
   # ═══════════════════════════════════════════════════════════
   # 发布 Release
@@ -269,13 +304,13 @@ jobs:
     name: 发布 Release
     needs: build
     runs-on: ubuntu-24.04
-    # 手动触发、定时、或 push 到 main 时发布
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'push'
+    # 手动触发、定时、或 push 时发布 (但需要至少有 boot.img)
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'push') && github.event.inputs.boot_img_url != ''
     permissions:
       contents: write
 
     steps:
-      - name: 下载所有刷机包
+      - name: 下载所有 boot.img
         uses: actions/download-artifact@v4
         with:
           merge-multiple: true
@@ -289,8 +324,8 @@ jobs:
           | 文件 | 版本 |
           |------|------|
           INNEREOF
-          # 根据实际存在的 zip 文件动态生成文件列表
-          for f in *.zip; do
+          # 根据实际存在的 img 文件动态生成文件列表
+          for f in *.img; do
             if echo "$f" | grep -qi "ksunext"; then
               VER="KernelSU-Next | supercutefish/KernelSU-NEXT_Mi-ares"
             else
@@ -314,13 +349,21 @@ jobs:
           fi
           cat >> release-body.md <<'INNEREOF'
 
-          ### 刷入方法
-          1. 解锁 BL
-          2. 进 TWRP Recovery
-          3. 卡刷对应 zip 包
-          > 或 `fastboot flash boot` (需自行替换原厂 boot.img 内核字段)
+          ### 刷入方法 (fastboot)
+          1. 解锁 BootLoader
+          2. 手机进入 fastboot 模式 (关机后按住 电源+音量减)
+          3. 连接电脑, 确认 `fastboot devices` 能识别设备
+          4. 刷入 boot.img:
+          ```
+          fastboot flash boot <下载的img文件名>
+          fastboot reboot
+          ```
+          5. 重启后安装 KernelSU Manager 验证
 
-          > ⚠️ 非官方编译, 仅供学习研究, 刷机风险自负
+          > ⚠️ 刷错 boot.img 可能导致不开机, 请确保:
+          > - boot.img 来自你当前系统版本的固件
+          > - 刷入前备份原厂 boot.img (`fastboot boot` 可临时引导不刷入)
+          > - 非官方编译, 仅供学习研究, 刷机风险自负
           INNEREOF
           echo "生成的 Release 描述:"
           cat release-body.md
@@ -332,6 +375,6 @@ jobs:
           name: KernelSU 红米K40G 内核 #${{ github.run_number }}
           body_path: release-body.md
           files: |
-            *.zip
+            *.img
           prerelease: false
           make_latest: true
