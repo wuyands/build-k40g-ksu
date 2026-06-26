@@ -123,7 +123,28 @@ jobs:
         run: |
           echo "克隆 ${KERNEL_REPO_FULL} @ ${KERNEL_BRANCH}"
           # 不使用 --depth=1 浅克隆, 因为需要子模块历史来 checkout
-          git clone -b "${KERNEL_BRANCH}" "https://github.com/${KERNEL_REPO_FULL}.git" kernel --recurse-submodules
+          git clone -b "${KERNEL_BRANCH}" "https://github.com/${KERNEL_REPO_FULL}.git" kernel
+          cd kernel
+
+          # 尝试初始化子模块, 如果失败则手动处理
+          git submodule update --init --recursive || {
+            echo "::warning::子模块自动拉取失败, 尝试手动克隆 KernelSU"
+            # 手动克隆 KernelSU 到子模块路径 (drivers/kernelsu 是 symlink 指向 KernelSU/)
+            KSU_DIR="KernelSU"
+            if [ ! -d "$KSU_DIR" ] || [ -z "$(ls -A $KSU_DIR 2>/dev/null)" ]; then
+              rm -rf "$KSU_DIR"
+              git clone --depth=1 "https://github.com/tiann/KernelSU.git" "$KSU_DIR"
+            fi
+            # 同样处理小写版本 (如果存在)
+            if grep -q 'kernelSU' .gitmodules 2>/dev/null; then
+              if [ ! -d "kernelSU" ] || [ -z "$(ls -A kernelSU 2>/dev/null)" ]; then
+                rm -rf kernelSU
+                git clone --depth=1 "https://github.com/tiann/KernelSU.git" kernelSU
+              fi
+            fi
+          }
+
+          cd ..
           echo "## 内核源码 (${KSU_TYPE})" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           git -C kernel log -1 --format='提交: %H%n作者: %an%n日期: %ad%n说明: %s' >> $GITHUB_STEP_SUMMARY
